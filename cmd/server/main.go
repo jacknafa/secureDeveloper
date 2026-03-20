@@ -131,16 +131,33 @@ func main() {
 				return
 			}
 
-			c.JSON(http.StatusAccepted, gin.H{
-				"message": "dummy register handler",
-				"todo":    "replace with actual signup validation and insert query",
+			if request.Username == "" || request.Name == "" || request.Email == "" || request.Phone == "" || request.Password == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "모두 입력해야 합니다."})
+				return
+			}
+
+			_, err = store.db.Exec(
+				`INSERT INTO users 
+				(username, name, email, phone, password, balance, is_admin)
+				VALUES (?, ?, ?, ?, ?, 0, ?)`,
+				request.Username, request.Name, request.Email, request.Phone, request.Password, 0)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "회원가입 실패"})
+				return
+			}
+
+			c.JSON(http.StatusCreated, gin.H{
+				"message": "회원가입 성공",
 				"user": gin.H{
 					"username": request.Username,
 					"name":     request.Name,
 					"email":    request.Email,
 					"phone":    request.Phone,
+					"balance":  0,
+					"is_admin": false,
 				},
 			})
+
 		})
 
 		auth.POST("/login", func(c *gin.Context) {
@@ -193,6 +210,7 @@ func main() {
 				"todo":    "replace with revoke or audit logic if needed",
 			})
 		})
+	
 
 		auth.POST("/withdraw", func(c *gin.Context) {
 			var request WithdrawAccountRequest
@@ -207,10 +225,18 @@ func main() {
 				return
 			}
 			user, ok := sessions.lookup(token)
+
+			if !ok || user.Password != request.Password {
+				c.JSON(http.StatusUnauthorized, gin.H{"message": "invalid credentials"})
+				return
+			}
+			
 			if !ok {
 				c.JSON(http.StatusUnauthorized, gin.H{"message": "invalid authorization token"})
 				return
 			}
+
+			sessions.delete(token)
 
 			c.JSON(http.StatusAccepted, gin.H{
 				"message": "dummy withdraw handler",
@@ -235,6 +261,8 @@ func main() {
 			}
 
 			c.JSON(http.StatusOK, gin.H{"user": makeUserResponse(user)})
+
+
 		})
 
 		protected.POST("/banking/deposit", func(c *gin.Context) {
@@ -327,19 +355,45 @@ func main() {
 				return
 			}
 
+			rows, _ := store.db.Query(`
+				SELECT 
+					posts.id,
+					posts.title,
+					posts.content,
+					posts.owner_id,
+					users.name,
+					users.email,
+					posts.created_at,
+					posts.updated_at
+				FROM posts
+				JOIN users ON p.owner_id = u.id
+				ORDER BY p.id DESC
+			`)
+			defer rows.Close()
+
+			posts := []PostView{}
+
+			for rows.Next() {
+				var post PostView
+				err := rows.Scan(
+					&post.ID,
+					&post.Title,
+					&post.Content,
+					&post.OwnerID,
+					&post.Author,
+					&post.AuthorEmail,
+					&post.CreatedAt,
+					&post.UpdatedAt,
+				)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"message": "변환 실패"})
+					return
+				}
+				posts = append(posts, post)
+			}
+
 			c.JSON(http.StatusOK, PostListResponse{
-				Posts: []PostView{
-					{
-						ID:          1,
-						Title:       "Dummy Post",
-						Content:     "This is a fixed dummy response. Replace this later with real board logic.",
-						OwnerID:     1,
-						Author:      "Alice Admin",
-						AuthorEmail: "alice.admin@example.com",
-						CreatedAt:   "2026-03-19T09:00:00Z",
-						UpdatedAt:   "2026-03-19T09:00:00Z",
-					},
-				},
+				Posts: posts,
 			})
 		})
 
@@ -361,9 +415,26 @@ func main() {
 				return
 			}
 
+			title := strings.TrimSpace(request.Title)
+			content := strings.TrimSpace(request.Content)
+
+			if title == "" || content == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "제목과 내용을 모두 입력해야 합니다."})
+				return
+			}
+
 			now := time.Now().Format(time.RFC3339)
+			_, err := store.db.Exec(
+			`INSERT INTO posts (title, content, owner_id, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?)`, 
+			title, content, user.ID, now, now)
+			if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "게시글 작성 실패"})
+			return
+				}
+				
 			c.JSON(http.StatusCreated, gin.H{
-				"message": "dummy create post handler",
+				"message": "게시글 등록",
 				"todo":    "replace with insert query",
 				"post": PostView{
 					ID:          1,
